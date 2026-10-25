@@ -1,0 +1,5 @@
+{
+  "url": "http://YOUR_NAS_IP:8767/admin/codex/status",
+  "ingest_token": "CHANGE_ME_CODEX_INGEST_TOKEN",
+  "codex_path": "C:/path/to/codex.exe"
+}

@@ -1,0 +1,14 @@
+services:
+  roundclock:
+    image: python:3.12-slim
+    container_name: roundclock-desktop
+    restart: unless-stopped
+    working_dir: /app
+    command: [python, -u, /app/bootstrap.py]
+    env_file: .env
+    ports:
+      - "8767:8767"
+    volumes:
+      - ./:/app
+      - ${HERMES_CONFIG_PATH:?set HERMES_CONFIG_PATH}:/hermes:ro
+    mem_limit: 1024m

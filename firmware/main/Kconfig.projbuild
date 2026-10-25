@@ -1,0 +1,8 @@
+menu "Round screen test"
+config SCREEN_INIT_STD
+    bool "Use alternate Xiaozhi STD panel initialization"
+    default n
+    help
+        Default is the Taiji Pi PDM board revision matching the attached configuration.
+        This changes only the LCD initialization table, not audio hardware.
+endmenu

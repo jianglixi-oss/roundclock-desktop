@@ -1,0 +1,7 @@
+{
+  "tts": "edge",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "pitch": "+0Hz",
+  "rate": "+5%",
+  "model": "deepseek"
+}
