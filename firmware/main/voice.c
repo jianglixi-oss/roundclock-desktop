@@ -38,7 +38,7 @@ static char status_text[96]="",transcript[1024]="",reply_text[8192]="";
 static int level=0,page=0;
 static int scroll_offset=0;
 static int64_t scroll_at=0;
-enum {CMD_ENTER=1,CMD_LEAVE,CMD_TOGGLE,CMD_MICCHECK,CMD_BEEP,CMD_COMPLETE};
+enum {CMD_ENTER=1,CMD_LEAVE,CMD_TOGGLE,CMD_MICCHECK,CMD_BEEP,CMD_COMPLETE,CMD_COMPLETE_BEEP};
 
 static void lock(void){xSemaphoreTake(view_lock,portMAX_DELAY);}
 static void unlock(void){xSemaphoreGive(view_lock);}
@@ -91,6 +91,7 @@ void voice_enter(void){queue(CMD_ENTER);}
 void voice_leave(void){queue(CMD_LEAVE);}
 void voice_toggle(void){queue(CMD_TOGGLE);}
 void voice_notify_completion(void){queue(CMD_COMPLETE);}
+void voice_notify_completion_kind(int kind){if(kind!=2)queue(kind==1?CMD_COMPLETE_BEEP:CMD_COMPLETE);}
 
 static bool send_control(const char *json)
 {
@@ -224,7 +225,7 @@ static void audio_worker(void *arg)
 {
     (void)arg;int16_t input[320],stereo[960];bool was_recording=false;
     int warmup=0,speech_frames=0,silence_frames=0,record_frames=0;int64_t check_until=0,last_level=0;
-    double check_peak=0,check_floor=1e9,raw_mean=0;float dc=0;bool pending_completion=false;
+    double check_peak=0,check_floor=1e9,raw_mean=0;float dc=0;int pending_completion=0;
     for(;;){
         int command;
         while(xQueueReceive(commands,&command,0)==pdTRUE){
@@ -236,9 +237,10 @@ static void audio_worker(void *arg)
                 else {continuous=true;start_recording();}
             }else if(command==CMD_MICCHECK){check_until=esp_timer_get_time()+3000000;check_peak=0;check_floor=1e9;ESP_LOGI(TAG,"MICCHECK started (3 seconds)");}
             else if(command==CMD_BEEP&&!recording&&!playing)beep();
-            else if(command==CMD_COMPLETE)pending_completion=true;
+            else if(command==CMD_COMPLETE)pending_completion=1;
+            else if(command==CMD_COMPLETE_BEEP)pending_completion=2;
         }
-        if(pending_completion&&!session&&!recording&&!playing){pending_completion=false;completion_notification();}
+        if(pending_completion&&!session&&!recording&&!playing){int kind=pending_completion;pending_completion=0;if(kind==2)beep();else completion_notification();}
         if(reconnect_hello&&connected){
             reconnect_hello=false;uint8_t mac[6];esp_read_mac(mac,ESP_MAC_WIFI_STA);char hello[128];
             snprintf(hello,sizeof(hello),"{\"type\":\"hello\",\"device_id\":\"s3-%02x%02x%02x%02x%02x%02x\"}",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);send_control(hello);

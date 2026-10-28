@@ -88,7 +88,7 @@ class Events:
         return {'state':chosen['state'],'state_at':chosen['at'],'active':len(busy)}
 
 def main():
-    quota=Quota();events=Events();windows={};usage_at=0;next_quota=0;last_error=0
+    quota=Quota();events=Events();windows={};usage_at=0;next_quota=0;last_error=0;usage_interval=120;sync_interval=3
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         while True:
@@ -99,19 +99,21 @@ def main():
                     for name in ['primary','secondary']:
                         value=result.get(name)
                         windows[name]=None if value is None else {'used':value.get('usedPercent'),'minutes':value.get('windowDurationMins',0),'reset':value.get('resetsAt',0)}
-                    usage_at=int(now);next_quota=now+120
+                    usage_at=int(now);next_quota=now+usage_interval
                 except Exception:
                     quota.close();next_quota=now+30
             try:
                 data={**events.read(),**windows,'usage_at':usage_at}
                 request=urllib.request.Request(CONFIG['url'],data=json.dumps(data).encode(),headers={
                     'Authorization':'Bearer '+CONFIG['ingest_token'],'Content-Type':'application/json'})
-                with opener.open(request,timeout=5) as response:response.read()
+                with opener.open(request,timeout=5) as response:reply=json.load(response)
+                options=reply.get('config') or {};usage_interval=max(30,min(600,int(options.get('usage_interval',120))));sync_interval=max(2,min(10,int(options.get('sync_interval',3))))
+                next_quota=min(next_quota,usage_at+usage_interval)
                 (ROOT/'health.json').write_text(json.dumps({'updated_at':int(now),'state':data['state'],'usage_at':usage_at}),encoding='utf-8')
             except Exception:
                 if now-last_error>60:print('Codex display sync temporarily unavailable',flush=True);last_error=now
             if '--once' in sys.argv:return
-            time.sleep(3)
+            time.sleep(sync_interval)
     finally:quota.close()
 
 if __name__=='__main__':

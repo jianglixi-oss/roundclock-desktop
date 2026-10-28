@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>圆屏自选股</title>
 <style>body{font:16px system-ui;background:#0c0d10;color:#f5f5f7;max-width:600px;margin:32px auto;padding:0 20px}h1{font-size:28px}input,button{font:inherit;border:0;border-radius:12px;padding:13px;background:#23252a;color:inherit}input{box-sizing:border-box;min-width:0;flex:1}button{background:#287af5;cursor:pointer}.row{display:flex;gap:10px;margin:14px 0}.card{padding:16px;border-radius:16px;background:#191b20;margin:12px 0;display:flex;align-items:center;justify-content:space-between;gap:10px}.hint{color:#a5a7ae;font-size:14px;line-height:1.7}.red{color:#ff655d}.green{color:#5fce95}#status{min-height:26px;color:#ffbd69}.code{font-size:14px;color:#9a9ca5}.remove{background:#36383e}section[hidden]{display:none}</style>
 <h1>自选股</h1><p class="hint">圆屏显示行情，手机管理自选。支持沪深北代码、中文名称及拼音首字母，如 000001、平安银行、payh。</p>
-<section id="login"><p>在圆屏股票应用点击“添加/管理”，查看六位设置码。</p><div class="row"><input id="pin" type="password" inputmode="numeric" maxlength="6" placeholder="六位设置码"><button id="unlock">进入</button></div></section>
+<section id="login" hidden><input id="pin" type="hidden"><button id="unlock" hidden>进入</button></section><p><a href="/settings" target="_top" style="color:#86b7ff">返回设置中心</a></p>
 <section id="editor" hidden><div class="row"><input id="query" placeholder="代码 / 名称 / 拼音"><button id="search">搜索</button></div><div id="results"></div><h2>我的自选 <small id="count"></small></h2><div id="list"></div><p class="hint">点击添加或移除会自动保存，圆屏几秒内同步。最多 12 只。圆屏显示自选清单，超出屏幕可上下滑动。</p><p class="hint">行情源：腾讯财经；搜索源：新浪财经。显示数据时间，休市时保留最近交易日数据。</p></section><p id="status" role="status"></p>
 <script>
 let pin='',watch=[];const $=id=>document.getElementById(id);function message(t){$('status').textContent=t}
@@ -11,5 +11,5 @@ function render(){$('list').replaceChildren();$('count').textContent=watch.lengt
 async function save(action,symbol){message('正在保存…');try{let result=await api('/stocks/api/watchlist',{action,symbol});watch=result.quotes;render();message('已保存，圆屏将在几秒内同步。')}catch(e){message(e.message)}}
 $('unlock').onclick=async()=>{pin=$('pin').value.trim();try{let value=await api('/stocks/api/list');watch=value.quotes;$('login').hidden=true;$('editor').hidden=false;render();message('')}catch(e){message(e.message)}};
 $('search').onclick=async()=>{let key=$('query').value.trim();if(!key)return;message('正在搜索…');try{let value=await api('/stocks/api/search?q='+encodeURIComponent(key));$('results').replaceChildren();for(let item of value.items)$('results').append(card(item,()=>save('add',item.symbol),'添加'));message(value.items.length?'':'未找到，请尝试代码或拼音首字母。')}catch(e){message(e.message)}};
-$('query').onkeydown=e=>{if(e.key==='Enter')$('search').click()};$('pin').onkeydown=e=>{if(e.key==='Enter')$('unlock').click()};
+$('query').onkeydown=e=>{if(e.key==='Enter')$('search').click()};$('unlock').click();
 </script></html>

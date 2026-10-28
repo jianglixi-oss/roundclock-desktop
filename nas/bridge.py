@@ -71,16 +71,17 @@ def save_history(device,messages):
 
 async def hermes_deltas(device,text,selection=None):
     messages=[{'role':'system','content':'这是桌面语音终端对话。请优先用简洁、自然的中文回答，适合直接朗读；用户明确要求详细内容时再展开。'}]+load_history(device)+[{'role':'user','content':text}]
-    headers={'Authorization':'Bearer '+HERMES_KEY,'Idempotency-Key':str(uuid.uuid4()),'X-Hermes-Session-Key':'roundclock-'+device}
+    connection=load_center_config('hermes-connection.private.json');upstream_url=connection.get('url',HERMES_URL);upstream_key=connection.get('api_key',HERMES_KEY)
+    headers={'Authorization':'Bearer '+upstream_key,'Idempotency-Key':str(uuid.uuid4()),'X-Hermes-Session-Key':'roundclock-'+device}
     body={'model':'hermes-agent','messages':messages,'stream':True,'model_options':{'reasoning':{'enabled':True,'effort':'low'}}}
     selected=selection or settings().get('model')
     if selected=='deepseek':
         body.update(model='deepseek-flash',provider='deepseek',model_options={'reasoning':{'enabled':False}})
     complete=[]
-    async with client.post(HERMES_URL+'/v1/chat/completions',headers=headers,json=body,timeout=aiohttp.ClientTimeout(total=240,sock_read=90)) as response:
+    async with client.post(upstream_url+'/v1/chat/completions',headers=headers,json=body,timeout=aiohttp.ClientTimeout(total=240,sock_read=90)) as response:
         if response.status!=200:
             detail=(await response.text())[:300]
-            LOG.error('Hermes HTTP %s: %s',response.status,detail)
+            LOG.error('Hermes HTTP %s',response.status)
             raise RuntimeError('Hermes 服务暂时无法响应（HTTP '+str(response.status)+'）')
         async for raw in response.content:
             line=raw.decode('utf-8',errors='replace').strip()
@@ -94,7 +95,7 @@ async def hermes_deltas(device,text,selection=None):
             choice=choices[0]
             if choice.get('finish_reason') in ('error','cancelled'):
                 detail=json.dumps(event,ensure_ascii=False)
-                for key in [HERMES_KEY,DEEPSEEK_KEY,hermes_env.get('DEEPSEEK_API_KEY','')]:
+                for key in [upstream_key,HERMES_KEY,DEEPSEEK_KEY,hermes_env.get('DEEPSEEK_API_KEY','')]:
                     if key:detail=detail.replace(key,'[redacted]')
                 LOG.error('Hermes incomplete: %s',detail[:2000])
                 raise RuntimeError('Hermes 本次处理未完成')
@@ -269,7 +270,7 @@ class Connection:
             LOG.info('Voice timing: %s',metrics)
         except asyncio.CancelledError:raise
         except Exception:
-            last_error=traceback.format_exc().replace(HERMES_KEY,'[redacted]') if HERMES_KEY else traceback.format_exc()
+            last_error='Voice turn failed; inspect service availability.'
             LOG.exception('Voice turn failed')
             await self.event('error',message='对话服务暂时不可用，请重试')
         finally:
@@ -406,6 +407,8 @@ from codex_status import install as install_codex_status
 install_codex_status(app,DEVICE_TOKEN)
 from stocks import install as install_stocks
 install_stocks(app,DEVICE_TOKEN)
+from settings_center import install as install_settings_center,load as load_center_config
+install_settings_center(app,lambda:client,HERMES_URL,HERMES_KEY,lambda request:authenticated(request,DEVICE_TOKEN))
 app.cleanup_ctx.append(setup)
 app.router.add_get('/health',health);app.router.add_get('/ws',websocket)
 app.router.add_post('/admin/test/{mode}',admin_test)

@@ -23,7 +23,8 @@ def install(app,device_token):
             safe[name]={'used':min(max(int(used),0),100) if used is not None else None,
                 'minutes':max(0,int(entry.get('minutes',0))),'reset':max(0,int(entry.get('reset',0)))}
         temporary=ROOT/'codex-status.new';temporary.write_text(json.dumps(safe));temporary.replace(ROOT/'codex-status.json')
-        return web.json_response({'ok':True})
+        from settings_center import codex_options
+        return web.json_response({'ok':True,'config':codex_options()})
     async def status(request):
         if not allowed(request,device_token):raise web.HTTPUnauthorized()
         try:value=json.loads((ROOT/'codex-status.json').read_text())
@@ -31,6 +32,8 @@ def install(app,device_token):
         value['online']=time.time()-value['received_at']<25
         if not value['online']:value['state']='offline'
         value['usage_stale']=time.time()-value.get('usage_at',0)>600
+        from settings_center import codex_options
+        value['notification']={'speech':0,'beep':1,'off':2}.get(codex_options()['notification'],0)
         return web.json_response(value,headers={'Cache-Control':'no-store'})
     app.router.add_post('/admin/codex/status',ingest)
     app.router.add_get('/codex/status',status)

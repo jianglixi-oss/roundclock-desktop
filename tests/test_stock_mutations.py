@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0,str(__import__("pathlib").Path("nas").resolve()))
 import asyncio,importlib.util,tempfile,json
 from pathlib import Path
 from aiohttp import web
@@ -8,7 +10,7 @@ async def main():
     m.Stocks.quotes=quotes
     with tempfile.TemporaryDirectory(dir='.') as directory:
         m.ROOT=Path(directory);assert m.ROOT.resolve().is_relative_to(Path('.').resolve())
-        app=web.Application();m.install(app,'test-device');pin=m.config()['pin'];headers={'X-Stocks-Pin':pin}
+        app=web.Application();m.install(app,'test-device');headers={}
         client=TestClient(TestServer(app));await client.start_server()
         try:
             assert (await client.get('/stocks/snapshot')).status==401

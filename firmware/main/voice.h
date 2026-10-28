@@ -14,6 +14,7 @@ void voice_toggle(void);
 void voice_next_page(void);
 void voice_tick(void);
 void voice_notify_completion(void);
+void voice_notify_completion_kind(int kind);
 void voice_get_view(voice_view_t *view);
 uint32_t voice_revision(void);
 bool voice_session_active(void);

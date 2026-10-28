@@ -1,4 +1,6 @@
 #include <string.h>
+#include "esp_wifi.h"
+#include "esp_netif.h"
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -43,13 +45,27 @@ static void worker(void *arg){
                         next.primary_used=number(a,"used",-1);next.secondary_used=number(b,"used",-1);
                         next.primary_reset=number(a,"reset",0);next.secondary_reset=number(b,"reset",0);
                         next.primary_minutes=number(a,"minutes",0);next.secondary_minutes=number(b,"minutes",0);
-                        next.active=number(root,"active",0);next.state_at=number(root,"state_at",0);
+                        next.notification=number(root,"notification",0);next.active=number(root,"active",0);next.state_at=number(root,"state_at",0);
                         next.usage_stale=!cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(root,"usage_stale"));
                         cJSON_Delete(root);
                     }
                     esp_http_client_close(client);
                 }
                 esp_http_client_cleanup(client);
+            }
+        }
+        if(clock_wifi_connected){
+            wifi_ap_record_t ap;esp_netif_ip_info_t ip;
+            esp_netif_t *netif=esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if(netif&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK&&esp_netif_get_ip_info(netif,&ip)==ESP_OK){
+                cJSON *body=cJSON_CreateObject();char address[20];snprintf(address,sizeof(address),IPSTR,IP2STR(&ip.ip));
+                cJSON_AddStringToObject(body,"ssid",(char*)ap.ssid);cJSON_AddStringToObject(body,"ip",address);cJSON_AddNumberToObject(body,"rssi",ap.rssi);
+                char *json=cJSON_PrintUnformatted(body);cJSON_Delete(body);
+                esp_http_client_config_t cfg={.url=VOICE_HTTP_BASE_URL "/settings/device",.timeout_ms=2000};
+                esp_http_client_handle_t report=esp_http_client_init(&cfg);
+                if(report&&json){esp_http_client_set_method(report,HTTP_METHOD_POST);esp_http_client_set_header(report,"Authorization",authorization);esp_http_client_set_header(report,"Content-Type","application/json");esp_http_client_set_post_field(report,json,strlen(json));esp_http_client_perform(report);}
+                if(report){esp_http_client_cleanup(report);}
+                free(json);
             }
         }
         xSemaphoreTake(mutex,portMAX_DELAY);

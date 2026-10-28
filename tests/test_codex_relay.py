@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0,str(__import__("pathlib").Path("nas").resolve()))
 import asyncio,importlib.util,tempfile,time,json
 from pathlib import Path
 from aiohttp.test_utils import TestClient,TestServer

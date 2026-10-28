@@ -71,17 +71,14 @@ def install(app,device_token):
     service=Stocks();config()
     def device(request):return hmac.compare_digest(request.headers.get('Authorization',''),'Bearer '+device_token)
     def manager(request):
-        address=request.remote or 'unknown';attempts=service.attempts.setdefault(address,[])
-        attempts[:]=[t for t in attempts if time.time()-t<60]
-        pin=request.headers.get('X-Stocks-Pin','')
-        if len(attempts)>=10:raise web.HTTPTooManyRequests(text='请稍后重试')
-        if not hmac.compare_digest(pin,config()['pin']):attempts.append(time.time());raise web.HTTPUnauthorized(text='设置码不正确')
+        value=request.headers.get('Origin')
+        if value and value!=request.scheme+'://'+request.host:raise web.HTTPForbidden(text='请在配置页面内操作')
     async def snapshot(request):
         if not device(request):raise web.HTTPUnauthorized()
         conf=config();quotes=await service.quotes(conf['symbols']);state=session_label()
         today=datetime.now(ZONE).strftime('%Y-%m-%d')
         if state=='交易时段' and any(q.get('date')!=today for q in quotes):state='行情待更新'
-        return web.json_response({'quotes':quotes,'market':state,'pin':conf['pin'],'settings_url':__import__('os').getenv('PUBLIC_BASE_URL','http://NAS_IP:8767').rstrip('/')+'/stocks','fetched_at':int(service.fetched),'source':'腾讯财经'},headers={'Cache-Control':'no-store'})
+        return web.json_response({'quotes':quotes,'market':state,'pin':conf['pin'],'settings_url':'http://YOUR_NAS_IP:8767/stocks','fetched_at':int(service.fetched),'source':'腾讯财经'},headers={'Cache-Control':'no-store'})
     async def page(request):return web.FileResponse(ROOT/'stocks.html',headers={'Cache-Control':'no-store'})
     async def listing(request):
         manager(request);conf=config();return web.json_response({'quotes':await service.quotes(conf['symbols'])})

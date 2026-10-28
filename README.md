@@ -1,9 +1,19 @@
 # RoundClock Desktop
 
-**开发测试版 / Work in progress。尚非正式版，不发布生产可用性承诺。**
+**v1.0 正式版**
 
 基于 ESP32-S3 N16R8 的 360×360 圆屏桌面终端：模拟时钟、Hermes 语音、Codex 状态和股票自选清单。
-本次保存对应实机 v0.10 开发快照，供继续迭代。仓库只保存源码和配置示例，不含已烧录固件、账户凭据和设备备份。
+首个正式版本，基于已完成实机验证的功能发布。仓库只保存源码和配置示例，不含已烧录固件、账户凭据和设备备份。
+
+## 界面截图
+
+以下为实机帧缓冲截图，网页截图使用演示配置。
+
+![模拟时钟](docs/screenshots/clock.png)
+
+![应用菜单](docs/screenshots/menu.png)
+
+![统一设置中心](docs/screenshots/settings.png)
 
 ## 目前功能
 
@@ -13,7 +23,7 @@
 - 股票：代码、名称或拼音搜索自选；名称/代码/当前价格清单，超过5行可滑动与拖滚动条。支持沪深北，显示行情时间与休市状态。
 - 手机配网：扫描 2.4GHz Wi-Fi；设备设置热点默认免密码。
 
-## 设置与菜单（开发迭代）
+## 设置与菜单
 
 - 灰色圆角齿轮设置图标，时钟与设置始终保留。
 - 设置采用分层页面、大号时分选择与加减按钮；开关只响应右侧触控区，抬手确认，滑动时取消操作。
@@ -61,7 +71,7 @@ idf.py -p COM8 flash
 在 `nas/` 运行 `docker compose up -d`。初次启动需要下载 Python 依赖与语音识别模型。
 默认语音走原 Hermes 的 DeepSeek provider，原 Hermes 需已有有效的 DeepSeek 配置；不会自动改动其密钥或默认模型。
 
-股票管理入口为 `http://NAS_IP:8767/stocks`，六位设置码在圆屏“添加/管理”页查看。
+统一设置入口为 `http://NAS_IP:8767/settings`，无需登录或设置码。包含网络状态、股票、Hermes 和 Codex 配置，详见[设置中心](docs/settings-center.md)。配置服务仅部署于受信任的局域网。
 首次部署自选列表为空，由用户自己添加。行情是公开源的周期刷新数据，保留源时间，不保证交易所级实时性。
 
 ## Codex 电脑同步
@@ -77,6 +87,7 @@ idf.py -p COM8 flash
 python -m pip install aiohttp python-dotenv
 python tests/test_codex_relay.py
 python tests/test_stock_mutations.py
+python tests/test_settings_center.py
 ```
 
 当前验证范围与待处理项见 [开发状态](docs/development-status.md)。上游驱动来源和许可证见 `firmware/THIRD_PARTY.md`。

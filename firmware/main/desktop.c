@@ -345,11 +345,15 @@ static void toggle_switch(int x,int y,bool enabled)
 
 static void draw_options(void)
 {
-    preferences_t p=preferences_get();char text[64];label(options_page==2?"应用管理":options_page==1?"夜间时段":options_page==3?"夜间模式":"设置",180,33,5,WHITE);
+    preferences_t p=preferences_get();char text[64];label(options_page==2?"应用管理":options_page==1?"夜间时段":options_page==3?"夜间模式":options_page==4?"网页配置":"设置",180,33,5,WHITE);
     if(options_page==0){
         line(89,112,271,112,56,0x18c3);label("夜间模式",144,94,5,WHITE);label(p.night?"已开启":"已关闭",144,118,5,MUTED);label(">",269,104,1,WHITE);
         line(89,197,271,197,56,0x18c3);label("应用管理",166,187,5,WHITE);label(">",269,189,1,WHITE);
-        label("网络设置",170,260,5,MUTED);label(">",269,253,1,MUTED);
+        label("网页配置",170,260,5,MUTED);label(">",269,253,1,MUTED);
+    }else if(options_page==4){
+        label(STOCKS_SETTINGS_HOST,180,105,5,WHITE);label("/settings",180,139,5,WHITE);
+        label("手机连接家中Wi-Fi",180,188,5,MUTED);label("无需验证",180,220,5,MUTED);
+        label("设备Wi-Fi配网",180,270,5,WHITE);
     }else if(options_page==2){
         label("时钟始终启用",180,79,5,MUTED);
         label("Hermes Agent",135,122,5,WHITE);toggle_switch(267,134,p.apps&APP_HERMES);
@@ -447,8 +451,8 @@ static void scene(void)
         label("股票",180,23,5,WHITE);
         if(stock_settings){
             label("手机添加自选股",180,93,5,WHITE);
-            label(STOCKS_SETTINGS_HOST,180,133,0,0x5ef5);label("/stocks",180,161,0,0x5ef5);
-            label("设置码",180,202,5,MUTED);label(shown_stocks.pin[0]?shown_stocks.pin:"等待连接",180,232,1,WHITE);
+            label(STOCKS_SETTINGS_HOST,180,133,0,0x5ef5);label("/settings#stocks",180,161,0,0x5ef5);
+            label("无需验证",180,202,5,MUTED);
             label("轻触返回行情",180,292,5,MUTED);
         }else if(!shown_stocks.count){
             label("暂无自选股",180,142,5,WHITE);label("轻触添加股票",180,197,5,0x5ef5);
@@ -583,7 +587,8 @@ static void tapped(int x,int y)
         else if(options_page==0){
             if(x>=58&&x<=302&&y>=82&&y<=145)options_page=3;
             else if(x>=58&&x<=302&&y>=166&&y<=229)options_page=2;
-            else if(x>=90&&x<=302&&y>=245&&y<=286)set_screen(SETUP);
+            else if(x>=90&&x<=302&&y>=245&&y<=286)options_page=4;
+        }else if(options_page==4){if(y>=245&&y<=290)set_screen(SETUP);
         }else if(options_page==2){
             if(x>=228&&x<=306&&y>=111&&y<=157)p.apps^=APP_HERMES;
             else if(x>=228&&x<=306&&y>=177&&y<=223)p.apps^=APP_CODEX;
@@ -800,7 +805,7 @@ static void desktop_task(void *arg)
             last_codex_revision=codex_revision();codex_view_t next;codex_get_view(&next);
             if(next.state!=previous_codex||(next.state==CX_COMPLETED&&next.state_at!=previous_codex_at)){
                 if((preferences_get().apps&APP_CODEX)&&codex_seen&&next.state==CX_COMPLETED&&next.state_at>last_codex_spoken+5&&llabs((long long)time(NULL)-next.state_at)<30){
-                    voice_notify_completion();last_codex_spoken=next.state_at;
+                    voice_notify_completion_kind(next.notification);last_codex_spoken=next.state_at;
                 }
                 if(next.state==CX_WORKING||next.state==CX_WAITING||next.state==CX_COMPLETED||next.state==CX_ERROR)codex_notice_until=now+10000000;
                 previous_codex=next.state;previous_codex_at=next.state_at;
