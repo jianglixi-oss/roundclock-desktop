@@ -1,0 +1,17 @@
+{
+  "before": {
+    "frames": 24.0,
+    "frame_ms": 159.88,
+    "draw_ms": 36.85,
+    "io_ms": 122.57,
+    "fps": 5.61
+  },
+  "optimized": {
+    "frames": 24.0,
+    "frame_ms": 29.45,
+    "draw_ms": 6.26,
+    "io_ms": 22.85,
+    "fps": 25.53
+  },
+  "notes": "24 consecutive menu refreshes on the same ESP32-S3; excludes capture. Not a guarantee of all-screen interactive FPS."
+}

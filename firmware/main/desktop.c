@@ -26,21 +26,24 @@
 #include "codex.h"
 #include "stocks.h"
 #include "voice_config.h"
+#include "preferences.h"
 #include "panel_init.h"
 
 #define W 360
-#define STRIPE 20
+#define STRIPE stripe_height
+static int stripe_height=90;
 #define WHITE 0xef5d
 #define MUTED 0x7bcf
 #define GOLD 0xfd8b
 #define PURPLE 0xb29f
-typedef enum {CLOCK,MENU,HERMES,SETUP,CODEX,STOCKS} Screen;
+typedef enum {CLOCK,MENU,HERMES,SETUP,CODEX,STOCKS,OPTIONS} Screen;
 typedef struct {int x,y;} Tap;
-static Screen screen=CLOCK;
-static const char *names[]={"CLOCK","MENU","HERMES","SETUP","CODEX","STOCKS"};
+static volatile Screen screen=CLOCK;
+static const char *names[]={"CLOCK","MENU","HERMES","SETUP","CODEX","STOCKS","OPTIONS"};
 static const char *TAG="desktop";
 static esp_lcd_panel_handle_t panel;
 static uint16_t *pixels;
+static uint16_t *pixel_buffers[2];
 static SemaphoreHandle_t transfer_done;
 static QueueHandle_t taps;
 static int stripe_y;
@@ -54,6 +57,18 @@ static int64_t codex_notice_until=0;
 static i2c_master_dev_handle_t touch;
 static volatile bool touch_irq=false;
 static bool touch_down=false;
+static uint16_t *icon_bitmaps[5];
+static uint16_t *icon_render_target=NULL;
+static float menu_position=0;
+static float menu_animation_from=0;
+static int64_t menu_animation_started=0;
+static int menu_target=0,options_page=0;
+static int time_edit_row=0;
+static bool menu_dragging=false;
+static int selected_time_part[2]={0,0};
+static int benchmark_left=0;
+static int64_t benchmark_start=0,perf_total=0,perf_draw=0,perf_io=0;
+static unsigned perf_frames=0;
 static int64_t last_tap=0,last_activity=0;
 static volatile bool capture_requested=false;
 
@@ -77,8 +92,10 @@ static bool dma_done(esp_lcd_panel_io_handle_t io,esp_lcd_panel_io_event_data_t 
 
 static void pixel(int x,int y,uint16_t color,int alpha)
 {
-    if(x<0||x>=W||y<stripe_y||y>=stripe_y+STRIPE||alpha<=0) return;
-    uint16_t *p=&pixels[(y-stripe_y)*W+x];
+    if(alpha<=0)return;
+    uint16_t *p;
+    if(icon_render_target){if(x<0||x>=100||y<0||y>=100)return;p=&icon_render_target[y*100+x];}
+    else{if(x<0||x>=W||y<stripe_y||y>=stripe_y+STRIPE)return;p=&pixels[(y-stripe_y)*W+x];}
     if(alpha<15) {
         uint16_t bg=__builtin_bswap16(*p);
         int r=(((color>>11)&31)*alpha+((bg>>11)&31)*(15-alpha))/15;
@@ -102,7 +119,7 @@ static void circle(int cx,int cy,int radius,uint16_t color)
     }
 }
 
-static void line(int x0,int y0,int x1,int y1,int thickness,uint16_t color)
+static void line_alpha(int x0,int y0,int x1,int y1,int thickness,uint16_t color,int opacity)
 {
     float dx=x1-x0,dy=y1-y0,length=dx*dx+dy*dy,r=thickness*0.5f;
     int left=(x0<x1?x0:x1)-(int)r-1,right=(x0>x1?x0:x1)+(int)r+1;
@@ -116,9 +133,11 @@ static void line(int x0,int y0,int x1,int y1,int thickness,uint16_t color)
         float ex=x-x0-t*dx,ey=y-y0-t*dy;
         int a=(int)((r+0.5f-sqrtf(ex*ex+ey*ey))*15);
         if(a>15)a=15;
-        pixel(x,y,color,a);
+        pixel(x,y,color,a*opacity/15);
     }
 }
+
+static void line(int x0,int y0,int x1,int y1,int thickness,uint16_t color){line_alpha(x0,y0,x1,y1,thickness,color,15);}
 
 static uint32_t next_code(const char **s)
 {
@@ -256,8 +275,110 @@ static void stocks_icon(int x,int y)
     line(x-30,y+30,x+31,y+30,1,0x632c);
 }
 
+static void settings_icon(int x,int y)
+{
+    tile(x,y,0x94b2,0x39e7);
+    for(int i=0;i<8;++i){float a=i*6.2831853f/8;line(x+lroundf(sinf(a)*21),y+lroundf(cosf(a)*21),x+lroundf(sinf(a)*29),y+lroundf(cosf(a)*29),9,WHITE);}
+    circle(x,y,24,WHITE);circle(x,y,13,0x5aeb);circle(x,y,6,WHITE);
+}
+
+static void init_icon_cache(void)
+{
+    void (*draw[])(int,int)={clock_icon,hermes_icon,codex_icon,stocks_icon,settings_icon};
+    for(int i=0;i<5;++i){
+        icon_bitmaps[i]=heap_caps_calloc(100*100,sizeof(uint16_t),MALLOC_CAP_SPIRAM);if(!icon_bitmaps[i])abort();
+        icon_render_target=icon_bitmaps[i];
+        for(stripe_y=0;stripe_y<W;stripe_y+=STRIPE)draw[i](50,50);
+    }
+    icon_render_target=NULL;stripe_y=0;
+}
+
+static int menu_apps(Screen *apps)
+{
+    preferences_t p=preferences_get();int count=0;apps[count++]=CLOCK;
+    if(p.apps&APP_HERMES)apps[count++]=HERMES;
+    if(p.apps&APP_CODEX)apps[count++]=CODEX;
+    if(p.apps&APP_STOCKS)apps[count++]=STOCKS;
+    apps[count++]=OPTIONS;return count;
+}
+
+static void menu_move(int step)
+{
+    Screen apps[5];int count=menu_apps(apps);int previous=menu_target;menu_target+=step;
+    if(menu_target<0)menu_target=0;
+    if(menu_target>=count)menu_target=count-1;
+    if(menu_target!=previous||fabsf(menu_target-menu_position)>0.005f){menu_animation_from=menu_position;menu_animation_started=esp_timer_get_time();}
+}
+
+static void scaled_icon(int index,int cx,int cy,float scale)
+{
+    int size=lroundf(100*scale),left=cx-size/2,top=cy-size/2;
+    int step=(100<<16)/size,begin=left<0?0:left,end=left+size>W?W:left+size;
+    for(int y=stripe_y;y<stripe_y+STRIPE;++y){
+        if(y<top||y>=top+size)continue;
+        int sy=((y-top)*step)>>16;uint16_t *row=pixels+(y-stripe_y)*W;
+        for(int x=begin;x<end;++x)row[x]=icon_bitmaps[index][sy*100+(((x-left)*step)>>16)];
+    }
+}
+
+static void draw_carousel(void)
+{
+    Screen apps[5];int count=menu_apps(apps);const char *labels[]={"时钟","Hermes Agent","Codex","股票","设置"};
+    label("应用",180,36,1,WHITE);
+    for(int i=0;i<count;++i){
+        float distance=fabsf(i-menu_position);if(distance>1.9f)continue;
+        float scale=1.4f-fminf(distance,1.0f)*0.65f;int x=180+lroundf((i-menu_position)*136);
+        Screen app=apps[i];int icon=app==CLOCK?0:app==HERMES?1:app==CODEX?2:app==STOCKS?3:4;
+        scaled_icon(icon,x,171,scale);
+    }
+    int selected=menu_target;if(selected>=count)selected=count-1;
+    Screen current=apps[selected];int index=current==CLOCK?0:current==HERMES?1:current==CODEX?2:current==STOCKS?3:4;
+    label(labels[index],180,254,5,WHITE);
+    for(int i=0;i<count;++i)circle(180+(i-(count-1)/2.0f)*14,293,i==selected?4:2,i==selected?WHITE:MUTED);
+    label("左右滑动 · 点击打开",180,316,5,MUTED);
+}
+
+static void toggle_switch(int x,int y,bool enabled)
+{
+    line(x-13,y,x+13,y,23,enabled?0x35b0:0x39e7);circle(x+(enabled?13:-13),y,9,WHITE);
+}
+
+static void draw_options(void)
+{
+    preferences_t p=preferences_get();char text[64];label(options_page==2?"应用管理":options_page==1?"夜间时段":options_page==3?"夜间模式":"设置",180,33,5,WHITE);
+    if(options_page==0){
+        line(89,112,271,112,56,0x18c3);label("夜间模式",144,94,5,WHITE);label(p.night?"已开启":"已关闭",144,118,5,MUTED);label(">",269,104,1,WHITE);
+        line(89,197,271,197,56,0x18c3);label("应用管理",166,187,5,WHITE);label(">",269,189,1,WHITE);
+        label("网络设置",170,260,5,MUTED);label(">",269,253,1,MUTED);
+    }else if(options_page==2){
+        label("时钟始终启用",180,79,5,MUTED);
+        label("Hermes Agent",135,122,5,WHITE);toggle_switch(267,134,p.apps&APP_HERMES);
+        line(72,166,288,166,1,0x2104);
+        label("Codex",135,188,5,WHITE);toggle_switch(267,200,p.apps&APP_CODEX);
+        line(72,232,288,232,1,0x2104);
+        label("股票",135,254,5,WHITE);toggle_switch(267,266,p.apps&APP_STOCKS);
+    }else if(options_page==3){
+        label("启用夜间",132,94,5,WHITE);toggle_switch(267,106,p.night);
+        label(p.night?"已开启":"已关闭",180,133,5,MUTED);
+        line(87,212,273,212,70,0x18c3);label("生效时段",180,179,5,MUTED);
+        snprintf(text,sizeof(text),"%02d:%02d - %02d:%02d",p.start/60,p.start%60,p.end/60,p.end%60);label(text,180,211,1,WHITE);
+        label("夜间亮度50%",180,270,5,MUTED);
+    }else if(options_page==1){
+        line(92,91,144,91,36,time_edit_row==0?0x2295:0x2104);line(216,91,268,91,36,time_edit_row==1?0x2295:0x2104);
+        label("开始",118,81,5,WHITE);label("结束",242,81,5,WHITE);
+        int value=time_edit_row?p.end:p.start,part=selected_time_part[time_edit_row];
+        snprintf(text,sizeof(text),"%02d:%02d",value/60,value%60);stock_price(text,131,WHITE);
+        label("小时",138,204,5,part?MUTED:0x5ef5);label("分钟",222,204,5,part?0x5ef5:MUTED);
+        line(part?201:117,199,part?243:159,199,3,0x5ef5);
+        line(78,261,112,261,44,0x3186);line(248,261,282,261,44,0x3186);
+        label("-",95,245,1,WHITE);label("+",265,245,1,WHITE);
+    }
+    label(options_page?"返回设置":"返回菜单",180,316,5,MUTED);
+}
+
 static bool codex_banner_visible(codex_state_t state)
 {
+    if(!(preferences_get().apps&APP_CODEX))return false;
     if(state==CX_WORKING||state==CX_WAITING)return true;
     return (state==CX_COMPLETED||state==CX_ERROR)&&esp_timer_get_time()<codex_notice_until;
 }
@@ -319,12 +440,9 @@ static void scene(void)
     if(screen==CLOCK) {
         analog_clock();
     } else if(screen==MENU) {
-        if(codex_banner_visible(shown_codex.state))label(codex_state_label(shown_codex.state),180,29,5,0x5ef5);
-        else label("应用",180,25,1,WHITE);
-        clock_icon(120,112);hermes_icon(240,112);codex_icon(120,240);stocks_icon(240,240);
-        label("时钟",120,165,5,WHITE);label("Hermes",240,166,0,WHITE);
-        label("Codex",120,293,0,WHITE);label("股票",240,292,5,WHITE);
-        label("轻触空白返回",180,329,0,MUTED);
+        draw_carousel();
+    } else if(screen==OPTIONS){
+        draw_options();
     } else if(screen==STOCKS) {
         label("股票",180,23,5,WHITE);
         if(stock_settings){
@@ -385,13 +503,15 @@ static void scene(void)
         label("轻触返回",180,280,0,MUTED);
     }
     if(screen==CLOCK&&codex_banner_visible(shown_codex.state)){
-        line(92,287,268,287,28,0x18e4);
-        label(codex_state_label(shown_codex.state),180,277,5,0x5ef5);
+        line_alpha(92,273,268,273,28,0xffff,3);
+        label(codex_state_label(shown_codex.state),180,263,5,0x5ef5);
     }
 }
 
 static void render(void)
 {
+    static Screen last_rendered=CLOCK;
+    int64_t perf_started=esp_timer_get_time(),draw_us=0,io_us=0;
     bool capture=capture_requested;capture_requested=false;
     if(capture) {
         esp_log_level_set("*",ESP_LOG_NONE);
@@ -402,24 +522,45 @@ static void render(void)
     if(screen==HERMES)voice_get_view(&shown_voice);
     codex_get_view(&shown_codex);
     stocks_get_view(&shown_stocks);
-    for(stripe_y=0;stripe_y<W;stripe_y+=STRIPE) {
+    bool partial=screen==MENU&&last_rendered==MENU&&!capture;
+    int begin=partial?80:0,end=partial?320:W,buffer=0;bool in_flight=false;
+    for(stripe_y=begin;stripe_y<end;stripe_y+=STRIPE) {
+        pixels=pixel_buffers[buffer];
+        int64_t stage=esp_timer_get_time();
         memset(pixels,0,W*STRIPE*sizeof(uint16_t));scene();
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel,0,stripe_y,W,stripe_y+STRIPE,pixels));
-        if(xSemaphoreTake(transfer_done,pdMS_TO_TICKS(2000))!=pdTRUE) {
+        draw_us+=esp_timer_get_time()-stage;stage=esp_timer_get_time();
+        if(in_flight&&xSemaphoreTake(transfer_done,pdMS_TO_TICKS(2000))!=pdTRUE) {
             ESP_LOGE(TAG,"Display DMA timed out");abort();
         }
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel,0,stripe_y,W,stripe_y+STRIPE,pixels));in_flight=true;
+        io_us+=esp_timer_get_time()-stage;
         if(capture) capture=serial_write_all(pixels,W*STRIPE*sizeof(uint16_t));
+        buffer^=1;
     }
+    int64_t final_wait=esp_timer_get_time();
+    if(in_flight&&xSemaphoreTake(transfer_done,pdMS_TO_TICKS(2000))!=pdTRUE){ESP_LOGE(TAG,"Final display DMA timed out");abort();}
+    io_us+=esp_timer_get_time()-final_wait;last_rendered=screen;
     if(capture) serial_write_all("\nFRAMEEND\n",10);
     esp_log_level_set("*",ESP_LOG_INFO);
+    if(screen==MENU&&!capture){
+        ++perf_frames;perf_total+=esp_timer_get_time()-perf_started;perf_draw+=draw_us;perf_io+=io_us;
+        if(benchmark_left>0&&--benchmark_left==0)ESP_LOGI(TAG,"BENCH frames=%u frame_ms=%.2f draw_ms=%.2f io_ms=%.2f fps=%.2f",perf_frames,perf_total/(1000.0*perf_frames),perf_draw/(1000.0*perf_frames),perf_io/(1000.0*perf_frames),perf_frames*1000000.0/(esp_timer_get_time()-benchmark_start));
+    }
 }
 
 static void set_screen(Screen next)
 {
+    Screen previous=screen;
     if(screen==HERMES&&next!=HERMES)voice_leave();
     if(screen!=HERMES&&next==HERMES)voice_enter();
     stocks_set_active(next==STOCKS);
     if(next==STOCKS)stock_settings=false;
+    if(next==OPTIONS)options_page=0;
+    if(next==MENU){
+        Screen apps[5];int count=menu_apps(apps);menu_target=0;
+        for(int i=0;i<count;++i)if(apps[i]==previous)menu_target=i;
+        menu_position=menu_target;menu_animation_from=menu_target;menu_dragging=false;
+    }
     screen=next;last_activity=esp_timer_get_time();
     ESP_LOGI(TAG,"UI state=%s",names[screen]);
 }
@@ -428,7 +569,40 @@ static void tapped(int x,int y)
 {
     last_activity=esp_timer_get_time();
     ESP_LOGI(TAG,"Tap logical=(%d,%d)",x,y);
-    if(screen==CLOCK) set_screen(y>=267&&codex_banner_visible(shown_codex.state)?CODEX:MENU);
+    if(screen==CLOCK) set_screen(y>=251&&y<=295&&codex_banner_visible(shown_codex.state)?CODEX:MENU);
+    else if(screen==MENU){
+        if(y>=90&&y<=245){
+            if(x<105)menu_move(-1);
+            else if(x>255)menu_move(1);
+            else{Screen apps[5];int count=menu_apps(apps);if(menu_target<count)set_screen(apps[menu_target]);}
+        }else if(y>335)set_screen(CLOCK);
+    }
+    else if(screen==OPTIONS){
+        preferences_t p=preferences_get();
+        if(y>=302){if(options_page)options_page=options_page==1?3:0;else set_screen(MENU);}
+        else if(options_page==0){
+            if(x>=58&&x<=302&&y>=82&&y<=145)options_page=3;
+            else if(x>=58&&x<=302&&y>=166&&y<=229)options_page=2;
+            else if(x>=90&&x<=302&&y>=245&&y<=286)set_screen(SETUP);
+        }else if(options_page==2){
+            if(x>=228&&x<=306&&y>=111&&y<=157)p.apps^=APP_HERMES;
+            else if(x>=228&&x<=306&&y>=177&&y<=223)p.apps^=APP_CODEX;
+            else if(x>=228&&x<=306&&y>=243&&y<=289)p.apps^=APP_STOCKS;
+            preferences_set(p);
+        }else if(options_page==3){
+            if(x>=228&&x<=306&&y>=82&&y<=130){p.night=!p.night;preferences_set(p);}
+            else if(x>=55&&x<=305&&y>=169&&y<=250)options_page=1;
+        }else if(options_page==1){
+            if(y>=68&&y<=114){if(x>=70&&x<=166)time_edit_row=0;else if(x>=194&&x<=290)time_edit_row=1;}
+            else if(y>=123&&y<=228){if(x>=100&&x<=173)selected_time_part[time_edit_row]=0;else if(x>=187&&x<=262)selected_time_part[time_edit_row]=1;}
+            else if(y>=235&&y<=288&&((x>=55&&x<=135)||(x>=225&&x<=305))){
+                int value=time_edit_row?p.end:p.start,delta=selected_time_part[time_edit_row]?1:60;
+                value=(value+(x<180?-delta:delta)+1440)%1440;
+                if(time_edit_row)p.end=value;else p.start=value;
+                preferences_set(p);
+            }
+        }
+    }
     else if(screen==CODEX){if(y>=292)set_screen(MENU);}
     else if(screen==STOCKS){
         if(stock_settings){stock_settings=false;stocks_refresh();}
@@ -438,7 +612,6 @@ static void tapped(int x,int y)
     }
     else if(screen==HERMES){if(y>=300||(y>=292&&x>=105&&x<=255))set_screen(MENU);else if(y>=250&&x>230)voice_next_page();else voice_toggle();}
     else if(screen==SETUP) set_screen(CLOCK);
-    else if(x>=65&&x<=295&&y>=63&&y<=319) set_screen(y<191?(x<180?CLOCK:HERMES):(x<180?CODEX:STOCKS));
     else set_screen(CLOCK);
 }
 
@@ -468,6 +641,10 @@ static void init_touch(void)
 static bool poll_touch(void)
 {
     static int stock_drag_y=0;
+    static bool menu_gesture=false;
+    static int menu_start_x=0,menu_start_y=0,menu_last_x=0,menu_last_y=0,menu_start_index=0;
+    static bool options_gesture=false,options_moved=false;
+    static int options_start_x=0,options_start_y=0;
     if(!touch_irq&&!touch_down) return false;
     bool was_irq=touch_irq;touch_irq=false;
     uint8_t reg=0x01,b[6]={0};
@@ -478,17 +655,44 @@ static bool poll_touch(void)
     bool quick_tap=was_irq&&b[0]==5&&!touch_down&&!pressed;
     int64_t now=esp_timer_get_time();
     bool acted=false;
+    if(screen==OPTIONS&&start&&rawx<W&&rawy<W){options_gesture=true;options_moved=false;options_start_x=rawy;options_start_y=W-1-rawx;}
+    if(options_gesture&&screen==OPTIONS&&pressed&&rawx<W&&rawy<W){
+        if(abs(rawy-options_start_x)>18||abs(W-1-rawx-options_start_y)>18)options_moved=true;
+    }
+    if(options_gesture&&(!pressed||screen!=OPTIONS)){
+        options_gesture=false;
+        if(screen==OPTIONS&&!options_moved&&now-last_tap>150000){tapped(options_start_x,options_start_y);last_tap=now;acted=true;}
+    }
+    if(screen==MENU&&start&&rawx<W&&rawy<W){
+        menu_gesture=true;menu_dragging=true;menu_start_x=menu_last_x=rawy;menu_start_y=menu_last_y=W-1-rawx;menu_start_index=menu_target;
+    }
+    if(menu_gesture&&screen==MENU&&pressed&&rawx<W&&rawy<W){
+        Screen apps[5];int count=menu_apps(apps);bool moved=menu_last_x!=rawy||menu_last_y!=W-1-rawx;menu_last_x=rawy;menu_last_y=W-1-rawx;
+        menu_position=fmaxf(0,fminf(count-1,menu_start_index-(menu_last_x-menu_start_x)/136.0f));if(moved)acted=true;last_activity=now;
+    }
+    if(menu_gesture&&(!pressed||screen!=MENU)){
+        menu_gesture=false;menu_dragging=false;
+        if(screen==MENU){
+            int delta=menu_last_x-menu_start_x;
+            if(abs(delta)>24&&abs(delta)>abs(menu_last_y-menu_start_y)){
+                menu_target=menu_start_index;int steps=lroundf(-delta/136.0f);if(!steps)steps=delta<0?1:-1;menu_move(steps);
+            }else tapped(menu_start_x,menu_start_y);
+            last_tap=now;acted=true;
+        }
+    }
     if(start)stock_drag_y=W-1-rawx;
     if(screen==STOCKS&&!stock_settings&&pressed&&touch_down&&rawx<W&&rawy<W){
         int y=W-1-rawx,delta=stock_drag_y-y;
         if(abs(delta)>=28){stocks_next(delta>0?1:-1);stock_drag_y=y;acted=true;last_activity=now;}
     }
-    if((start||quick_tap)&&now-last_tap>350000&&rawx<W&&rawy<W) {
+    if((start||quick_tap)&&!menu_gesture&&!options_gesture&&screen!=MENU&&screen!=OPTIONS&&now-last_tap>350000&&rawx<W&&rawy<W) {
         /* Raw Y follows left-to-right; physical bottom taps report low raw X. */
         int x=rawy,y=W-1-rawx;
         ESP_LOGI(TAG,"Touch raw=(%d,%d) gesture=%d event=%d",rawx,rawy,b[0],event);
         tapped(x,y);last_tap=now;acted=true;
     }
+    else if(quick_tap&&!menu_gesture&&screen==MENU&&now-last_tap>350000&&rawx<W&&rawy<W){tapped(rawy,W-1-rawx);last_tap=now;acted=true;}
+    else if(quick_tap&&!options_gesture&&screen==OPTIONS&&now-last_tap>150000&&rawx<W&&rawy<W){tapped(rawy,W-1-rawx);last_tap=now;acted=true;}
     touch_down=pressed;
     return acted;
 }
@@ -511,6 +715,10 @@ static void serial_task(void *arg)
             else if(!strcmp(command,"SCAN")) {char *json=clock_scan_json();if(json){ESP_LOGI(TAG,"SCAN_RESULT=%s",json);free(json);}}
             else if(!strcmp(command,"HTTPTEST"))clock_http_scan_test();
             else if(!strcmp(command,"STATUS")) ESP_LOGI(TAG,"UI=%s TIME=%d WIFI=%d",names[screen],clock_time_valid,clock_wifi_connected);
+            else if(!strcmp(command,"PREFS")){preferences_t p=preferences_get();ESP_LOGI(TAG,"PREFS night=%d start=%u end=%u apps=%u brightness=%d",p.night,p.start,p.end,p.apps,preferences_brightness());}
+            else if(!strcmp(command,"SETTINGSTEST"))ESP_LOGI(TAG,"SETTINGSTEST=%s",preferences_self_test()?"PASS":"FAIL");
+            else if(!strcmp(command,"BENCH")){Tap tap={-5,0};xQueueSend(taps,&tap,0);}
+            else if(!strcmp(command,"MENU NEXT")||!strcmp(command,"MENU PREV")){Tap tap={!strcmp(command,"MENU NEXT")?-2:-3,0};xQueueSend(taps,&tap,0);}
             else voice_diagnostic(command);
             length=0;
         } else if(length<(int)sizeof(command)-1) command[length++]=c;
@@ -523,13 +731,21 @@ static void init_display(void)
     ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_48,GPIO_MODE_OUTPUT));gpio_set_level(GPIO_NUM_48,0);
     ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_15,GPIO_MODE_OUTPUT));gpio_set_level(GPIO_NUM_15,0);
     transfer_done=xSemaphoreCreateBinary();
-    pixels=heap_caps_malloc(W*STRIPE*sizeof(uint16_t),MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if(!transfer_done||!pixels) abort();
+    const int heights[]={90,60,20};
+    for(int i=0;i<3;++i){
+        stripe_height=heights[i];
+        pixel_buffers[0]=heap_caps_malloc(W*STRIPE*sizeof(uint16_t),MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+        pixel_buffers[1]=heap_caps_malloc(W*STRIPE*sizeof(uint16_t),MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+        if(pixel_buffers[0]&&pixel_buffers[1]&&(i==2||heap_caps_get_free_size(MALLOC_CAP_INTERNAL)>=110*1024))break;
+        free(pixel_buffers[0]);free(pixel_buffers[1]);pixel_buffers[0]=pixel_buffers[1]=NULL;
+    }
+    pixels=pixel_buffers[0];if(!transfer_done||!pixel_buffers[0]||!pixel_buffers[1])abort();
+    ESP_LOGI(TAG,"Display stripe=%d rows internal_free=%u",STRIPE,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     const spi_bus_config_t bus={.sclk_io_num=9,.data0_io_num=11,.data1_io_num=12,
         .data2_io_num=13,.data3_io_num=14,.max_transfer_sz=W*STRIPE*sizeof(uint16_t)};
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST,&bus,SPI_DMA_CH_AUTO));
     esp_lcd_panel_io_spi_config_t io_cfg={.cs_gpio_num=10,.dc_gpio_num=-1,.spi_mode=0,
-        .pclk_hz=20000000,.trans_queue_depth=2,.on_color_trans_done=dma_done,
+        .pclk_hz=40000000,.trans_queue_depth=2,.on_color_trans_done=dma_done,
         .lcd_cmd_bits=32,.lcd_param_bits=8,.flags.quad_mode=true};
     esp_lcd_panel_io_handle_t io;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST,&io_cfg,&io));
@@ -542,11 +758,13 @@ static void init_display(void)
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel,true));
 }
 
-void app_main(void)
+static void desktop_task(void *arg)
 {
+    (void)arg;
     init_display();render();gpio_set_level(GPIO_NUM_15,1);
     init_touch();
     clock_network_start();
+    preferences_init();init_icon_cache();
     taps=xQueueCreate(4,sizeof(Tap));if(!taps) abort();
     if(!usb_serial_jtag_is_driver_installed()) {
         usb_serial_jtag_driver_config_t cfg={.tx_buffer_size=2048,.rx_buffer_size=256};
@@ -561,8 +779,15 @@ void app_main(void)
     codex_state_t previous_codex=CX_OFFLINE;int64_t previous_codex_at=0,last_codex_spoken=0;bool codex_seen=false;
     for(;;) {
         bool dirty=poll_touch();Tap tap;
-        while(xQueueReceive(taps,&tap,0)==pdTRUE){if(tap.x<0)set_screen(SETUP);else tapped(tap.x,tap.y);dirty=true;}
+        while(xQueueReceive(taps,&tap,0)==pdTRUE){if(tap.x==-5){if(screen==MENU){perf_frames=0;perf_total=perf_draw=perf_io=0;benchmark_left=24;benchmark_start=esp_timer_get_time();}}else if(tap.x==-2||tap.x==-3){if(screen==MENU)menu_move(tap.x==-2?1:-1);}else if(tap.x<0)set_screen(SETUP);else tapped(tap.x,tap.y);dirty=true;}
         int64_t now=esp_timer_get_time();
+        static int64_t menu_frame_at=0;
+        if(screen==MENU&&!menu_dragging&&fabsf(menu_target-menu_position)>0.005f&&now-menu_frame_at>=30000){
+            float t=fminf(1.0f,(now-menu_animation_started)/220000.0f),ease=t*t*(3-2*t);
+            menu_position=menu_animation_from+(menu_target-menu_animation_from)*ease;menu_frame_at=now;dirty=true;
+            if(t>=1||fabsf(menu_target-menu_position)<0.005f)menu_position=menu_target;
+        }
+        if(!(preferences_get().apps&APP_CODEX))codex_seen=false;
         if(gpio_get_level(GPIO_NUM_0)==0) {
             if(!boot_start) boot_start=now;
             if(!boot_acted&&now-boot_start>2000000){set_screen(SETUP);dirty=true;boot_acted=true;}
@@ -574,20 +799,26 @@ void app_main(void)
         if(codex_revision()!=last_codex_revision){
             last_codex_revision=codex_revision();codex_view_t next;codex_get_view(&next);
             if(next.state!=previous_codex||(next.state==CX_COMPLETED&&next.state_at!=previous_codex_at)){
-                if(codex_seen&&next.state==CX_COMPLETED&&next.state_at>last_codex_spoken+5&&llabs((long long)time(NULL)-next.state_at)<30){
+                if((preferences_get().apps&APP_CODEX)&&codex_seen&&next.state==CX_COMPLETED&&next.state_at>last_codex_spoken+5&&llabs((long long)time(NULL)-next.state_at)<30){
                     voice_notify_completion();last_codex_spoken=next.state_at;
                 }
                 if(next.state==CX_WORKING||next.state==CX_WAITING||next.state==CX_COMPLETED||next.state==CX_ERROR)codex_notice_until=now+10000000;
                 previous_codex=next.state;previous_codex_at=next.state_at;
                 ESP_LOGI(TAG,"Codex state=%d used=%d/%d",next.state,next.primary_used,next.secondary_used);
             }
-            if(next.state!=CX_OFFLINE)codex_seen=true;
+            if((preferences_get().apps&APP_CODEX)&&next.state!=CX_OFFLINE)codex_seen=true;
             if(screen==CODEX||screen==CLOCK||screen==MENU)dirty=true;
         }
         time_t second=time(NULL);
-        if(second!=last_second){last_second=second;if(screen==CLOCK||screen==CODEX||now<codex_notice_until+1000000) dirty=true;}
+        if(second!=last_second){last_second=second;preferences_tick();if(screen==CLOCK||screen==CODEX||now<codex_notice_until+1000000) dirty=true;}
         if(capture_requested) dirty=true;
+        if(benchmark_left>0&&screen==MENU)dirty=true;
         if(dirty) render();
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(screen==MENU?1:pdMS_TO_TICKS(20));
     }
+}
+
+void app_main(void)
+{
+    if(xTaskCreatePinnedToCore(desktop_task,"desktop_ui",8192,NULL,4,NULL,1)!=pdPASS)abort();
 }

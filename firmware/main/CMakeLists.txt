@@ -1,1 +1,2 @@
-idf_component_register(SRCS "desktop.c" "network.c" "voice.c" "codex.c" "stocks.c" INCLUDE_DIRS "." EMBED_TXTFILES "setup.html" EMBED_FILES "chinese_font.bin" REQUIRES esp_lcd driver esp_timer st77916 esp_wifi esp_netif esp_event nvs_flash esp_http_server esp_http_client json esp_websocket_client)
+idf_component_register(SRCS "desktop.c" "network.c" "voice.c" "codex.c" "stocks.c" "preferences.c" INCLUDE_DIRS "." EMBED_TXTFILES "setup.html" EMBED_FILES "chinese_font.bin" REQUIRES esp_lcd driver esp_timer st77916 esp_wifi esp_netif esp_event nvs_flash esp_http_server esp_http_client json esp_websocket_client)
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/desktop.c" PROPERTIES COMPILE_OPTIONS "-O2")
