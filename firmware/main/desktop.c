@@ -139,6 +139,16 @@ static void line_alpha(int x0,int y0,int x1,int y1,int thickness,uint16_t color,
 
 static void line(int x0,int y0,int x1,int y1,int thickness,uint16_t color){line_alpha(x0,y0,x1,y1,thickness,color,15);}
 
+static void rounded_rect(int x0,int y0,int x1,int y1,int radius,uint16_t color)
+{
+    for(int y=y0;y<=y1;++y){
+        int inset=0;
+        if(y<y0+radius){int dy=y0+radius-y;inset=radius-(int)sqrtf((float)(radius*radius-dy*dy));}
+        else if(y>y1-radius){int dy=y-y1+radius;inset=radius-(int)sqrtf((float)(radius*radius-dy*dy));}
+        for(int x=x0+inset;x<=x1-inset;++x)pixel(x,y,color,15);
+    }
+}
+
 static uint32_t next_code(const char **s)
 {
     const uint8_t *p=(const uint8_t *)*s;uint32_t c=*p++;
@@ -180,6 +190,20 @@ static void label(const char *text,int center,int y,int font,uint16_t color)
     }
 }
 
+static int label_width(const char *text,int font)
+{
+    const Glyph *glyphs=font==5?chinese_glyphs:font==4?setup_glyphs:font==3?dial_glyphs:font==2?big_glyphs:(font==1?label_glyphs:small_glyphs);
+    int count=font==5?CHINESE_COUNT:font==4?SETUP_COUNT:font==3?DIAL_COUNT:font==2?BIG_COUNT:(font==1?LABEL_COUNT:SMALL_COUNT);
+    const char *s=text;int width=0;
+    while(*s){const Glyph *g=find_glyph(glyphs,count,next_code(&s));if(g)width+=g->offset_w;}
+    return width;
+}
+
+static void label_left(const char *text,int left,int y,int font,uint16_t color)
+{
+    label(text,left+label_width(text,font)/2,y,font,color);
+}
+
 static void wrapped(const char *text,int y,int max_width,int max_lines,uint16_t color)
 {
     char row[160];int used=0,width=0,lines=0;
@@ -215,23 +239,6 @@ static void tile(int cx,int cy,uint16_t top_color,uint16_t bottom_color)
     }
 }
 
-static void clock_icon(int x,int y)
-{
-    tile(x,y,0x18c3,0x0000);circle(x,y,34,0xffff);
-    for(int i=0;i<12;++i){float a=i*6.2831853f/12;line(x+lroundf(sinf(a)*28),y-lroundf(cosf(a)*28),x+lroundf(sinf(a)*31),y-lroundf(cosf(a)*31),2,0x0000);}
-    line(x,y,x-13,y-15,5,0x0000);line(x,y,x+20,y-13,3,0x0000);
-    line(x,y+7,x,y-25,1,0xfba0);circle(x,y,3,0x0000);circle(x,y,1,0xfba0);
-}
-
-static void hermes_icon(int x,int y)
-{
-    tile(x,y,0xfd89,0xf9a5);
-    line(x-15,y-19,x-15,y+20,6,0xffff);line(x+15,y-19,x+15,y+20,6,0xffff);
-    line(x-15,y,x+15,y,5,0xffff);
-    line(x-15,y-18,x-25,y-25,3,0xffff);line(x+15,y-18,x+25,y-25,3,0xffff);
-    line(x-20,y-13,x-29,y-19,2,0xffff);line(x+20,y-13,x+29,y-19,2,0xffff);
-}
-
 static void microphone_icon(int x,int y,bool listening)
 {
     tile(x,y,listening?0xfaa8:0x2d7f,listening?0xd906:0x0233);
@@ -243,13 +250,6 @@ static void microphone_icon(int x,int y,bool listening)
         line(px,py,nx,ny,3,WHITE);px=nx;py=ny;
     }
     line(x,y+18,x,y+28,3,WHITE);line(x-10,y+28,x+10,y+28,3,WHITE);
-}
-
-static void codex_icon(int x,int y)
-{
-    tile(x,y,0xf7be,0xbdf7);
-    line(x-23,y-15,x-9,y,5,0x1082);line(x-9,y,x-23,y+15,5,0x1082);
-    line(x+2,y+16,x+22,y+16,5,0x1082);
 }
 
 static void stock_price(const char *text,int y,uint16_t color)
@@ -267,30 +267,24 @@ static void stock_price(const char *text,int y,uint16_t color)
     }
 }
 
-static void stocks_icon(int x,int y)
-{
-    tile(x,y,0x2124,0x0000);
-    line(x-30,y+24,x-16,y+9,4,WHITE);line(x-16,y+9,x-5,y+14,4,WHITE);
-    line(x-5,y+14,x+8,y-12,4,WHITE);line(x+8,y-12,x+20,y-2,4,WHITE);line(x+20,y-2,x+31,y-25,4,WHITE);
-    line(x-30,y+30,x+31,y+30,1,0x632c);
-}
-
-static void settings_icon(int x,int y)
-{
-    tile(x,y,0x94b2,0x39e7);
-    for(int i=0;i<8;++i){float a=i*6.2831853f/8;line(x+lroundf(sinf(a)*21),y+lroundf(cosf(a)*21),x+lroundf(sinf(a)*29),y+lroundf(cosf(a)*29),9,WHITE);}
-    circle(x,y,24,WHITE);circle(x,y,13,0x5aeb);circle(x,y,6,WHITE);
-}
-
 static void init_icon_cache(void)
 {
-    void (*draw[])(int,int)={clock_icon,hermes_icon,codex_icon,stocks_icon,settings_icon};
+    extern const uint8_t icons_bin_start[] asm("_binary_icons_bin_start");
     for(int i=0;i<5;++i){
         icon_bitmaps[i]=heap_caps_calloc(100*100,sizeof(uint16_t),MALLOC_CAP_SPIRAM);if(!icon_bitmaps[i])abort();
-        icon_render_target=icon_bitmaps[i];
-        for(stripe_y=0;stripe_y<W;stripe_y+=STRIPE)draw[i](50,50);
+        memcpy(icon_bitmaps[i],icons_bin_start+i*100*100*2,100*100*2);
     }
-    icon_render_target=NULL;stripe_y=0;
+}
+
+static int app_index(Screen app)
+{
+    switch(app){
+        case CLOCK:return 0;
+        case HERMES:return 1;
+        case CODEX:return 2;
+        case STOCKS:return 3;
+        default:return 4;
+    }
 }
 
 static int menu_apps(Screen *apps)
@@ -328,12 +322,10 @@ static void draw_carousel(void)
     for(int i=0;i<count;++i){
         float distance=fabsf(i-menu_position);if(distance>1.9f)continue;
         float scale=1.4f-fminf(distance,1.0f)*0.65f;int x=180+lroundf((i-menu_position)*136);
-        Screen app=apps[i];int icon=app==CLOCK?0:app==HERMES?1:app==CODEX?2:app==STOCKS?3:4;
-        scaled_icon(icon,x,171,scale);
+        scaled_icon(app_index(apps[i]),x,171,scale);
     }
     int selected=menu_target;if(selected>=count)selected=count-1;
-    Screen current=apps[selected];int index=current==CLOCK?0:current==HERMES?1:current==CODEX?2:current==STOCKS?3:4;
-    label(labels[index],180,254,5,WHITE);
+    label(labels[app_index(apps[selected])],180,254,5,WHITE);
     for(int i=0;i<count;++i)circle(180+(i-(count-1)/2.0f)*14,293,i==selected?4:2,i==selected?WHITE:MUTED);
     label("左右滑动 · 点击打开",180,316,5,MUTED);
 }
@@ -345,15 +337,30 @@ static void toggle_switch(int x,int y,bool enabled)
 
 static void draw_options(void)
 {
-    preferences_t p=preferences_get();char text[64];label(options_page==2?"应用管理":options_page==1?"夜间时段":options_page==3?"夜间模式":options_page==4?"网页配置":"设置",180,33,5,WHITE);
+    preferences_t p=preferences_get();char text[64];label(options_page==2?"应用管理":options_page==1?"夜间时段":options_page==3?"夜间模式":options_page==4?"网页配置":options_page==5?"网络信息":"设置",180,33,5,WHITE);
     if(options_page==0){
-        line(89,112,271,112,56,0x18c3);label("夜间模式",144,94,5,WHITE);label(p.night?"已开启":"已关闭",144,118,5,MUTED);label(">",269,104,1,WHITE);
-        line(89,197,271,197,56,0x18c3);label("应用管理",166,187,5,WHITE);label(">",269,189,1,WHITE);
-        label("网页配置",170,260,5,MUTED);label(">",269,253,1,MUTED);
+        rounded_rect(62,54,298,110,14,0x18e4);
+        label_left("夜间模式",84,82,5,WHITE);
+        label(p.night?"已开启":"已关闭",228,82,5,MUTED);
+        label(">",283,82,1,MUTED);
+        rounded_rect(62,126,298,294,14,0x18e4);
+        line(76,182,284,182,1,0x39e7);
+        line(76,238,284,238,1,0x39e7);
+        label_left("应用管理",84,154,5,WHITE);label(">",283,154,1,MUTED);
+        label_left("网络信息",84,210,5,WHITE);label(">",283,210,1,MUTED);
+        label_left("网页配置",84,266,5,WHITE);label(">",283,266,1,MUTED);
     }else if(options_page==4){
         label(STOCKS_SETTINGS_HOST,180,105,5,WHITE);label("/settings",180,139,5,WHITE);
         label("手机连接家中Wi-Fi",180,188,5,MUTED);label("无需验证",180,220,5,MUTED);
         label("设备Wi-Fi配网",180,270,5,WHITE);
+    }else if(options_page==5){
+        label(clock_wifi_connected?"已连接 Wi-Fi":"未连接 Wi-Fi",180,60,5,clock_wifi_connected?WHITE:0xfa27);
+        label("网络名称",180,102,5,MUTED);
+        label(clock_sta_ssid[0]?clock_sta_ssid:"未配置",180,130,5,WHITE);
+        label("IP 地址",180,170,5,MUTED);
+        label(clock_sta_ip[0]?clock_sta_ip:"未获取",180,198,1,WHITE);
+        label("配网热点",180,244,5,MUTED);
+        label(clock_ap_ssid,180,272,5,WHITE);
     }else if(options_page==2){
         label("时钟始终启用",180,79,5,MUTED);
         label("Hermes Agent",135,122,5,WHITE);toggle_switch(267,134,p.apps&APP_HERMES);
@@ -416,12 +423,14 @@ static void analog_clock(void)
     const float tau=6.283185307f;
     for(int i=0;i<60;++i){
         float a=i*tau/60;int inner=i%5==0?155:162;
+        int thickness=(i%15==0)?5:2;
+        uint16_t tick_color=(i%15==0)?0xf800:(i%5==0?0xa514:0x630c);
         line(180+lroundf(sinf(a)*inner),180-lroundf(cosf(a)*inner),
-             180+lroundf(sinf(a)*172),180-lroundf(cosf(a)*172),2,i%5==0?0xa514:0x630c);
+             180+lroundf(sinf(a)*172),180-lroundf(cosf(a)*172),thickness,tick_color);
     }
     for(int n=1;n<=12;++n){
         float a=n*tau/12;char number[4];snprintf(number,sizeof(number),"%d",n);
-        label(number,180+lroundf(sinf(a)*132),180-lroundf(cosf(a)*132)-20,3,0xffff);
+        label(number,180+lroundf(sinf(a)*132),180-lroundf(cosf(a)*132)-14,0,0xffff);
     }
     if(!shown_valid){label("请校时",180,225,0,GOLD);return;}
     const char *week[]={"日","一","二","三","四","五","六"};
@@ -434,8 +443,9 @@ static void analog_clock(void)
     float second=seconds*tau/60;
     line(180,180,180+lroundf(sinf(hour)*94),180-lroundf(cosf(hour)*94),11,0xffff);
     line(180,180,180+lroundf(sinf(minute)*143),180-lroundf(cosf(minute)*143),9,0xffff);
-    line(180-lroundf(sinf(second)*25),180+lroundf(cosf(second)*25),
-         180+lroundf(sinf(second)*164),180-lroundf(cosf(second)*164),2,0xfa27);
+    int stx=180-lroundf(sinf(second)*25),sty=180+lroundf(cosf(second)*25);
+    int srx=180+lroundf(sinf(second)*164),sry=180-lroundf(cosf(second)*164);
+    line(stx,sty,srx,sry,3,0xfa27);            /* 秒针本体 */
     circle(180,180,8,0xffff);circle(180,180,5,0xfa27);circle(180,180,2,0x0000);
 }
 
@@ -464,9 +474,9 @@ static void scene(void)
                 char name[40];const char *end=q->name;for(int i=0;i<6&&*end;++i)next_code(&end);
                 int bytes=end-q->name;if(bytes>(int)sizeof(name)-1)bytes=sizeof(name)-1;memcpy(name,q->name,bytes);name[bytes]=0;
                 label(name,130,y,5,WHITE);label(q->code,113,y+20,0,MUTED);
-                uint16_t color=q->change>0?0xfa27:q->change<0?0x4e0d:WHITE;
-                if(q->valid)snprintf(text,sizeof(text),"%.2f",q->price);else snprintf(text,sizeof(text),"--");
-                label(text,251,y+3,1,q->stale?MUTED:color);
+                uint16_t color=q->percent>0?0xfa27:q->percent<0?0x4e0d:WHITE;
+                if(q->valid)snprintf(text,sizeof(text),"%+.2f%%",q->percent);else snprintf(text,sizeof(text),"--");
+                label(text,262,y+3,1,q->stale?MUTED:color);
             }
             if(shown_stocks.count>5){
                 line(310,89,310,269,3,0x2104);int thumb=180*5/shown_stocks.count;
@@ -585,9 +595,10 @@ static void tapped(int x,int y)
         preferences_t p=preferences_get();
         if(y>=302){if(options_page)options_page=options_page==1?3:0;else set_screen(MENU);}
         else if(options_page==0){
-            if(x>=58&&x<=302&&y>=82&&y<=145)options_page=3;
-            else if(x>=58&&x<=302&&y>=166&&y<=229)options_page=2;
-            else if(x>=90&&x<=302&&y>=245&&y<=286)options_page=4;
+            if(x>=62&&x<=298&&y>=54&&y<=110)options_page=3;
+            else if(x>=62&&x<=298&&y>=126&&y<=182)options_page=2;
+            else if(x>=62&&x<=298&&y>=182&&y<=238)options_page=5;
+            else if(x>=62&&x<=298&&y>=238&&y<=294)options_page=4;
         }else if(options_page==4){if(y>=245&&y<=290)set_screen(SETUP);
         }else if(options_page==2){
             if(x>=228&&x<=306&&y>=111&&y<=157)p.apps^=APP_HERMES;

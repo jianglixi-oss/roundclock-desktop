@@ -407,6 +407,8 @@ from codex_status import install as install_codex_status
 install_codex_status(app,DEVICE_TOKEN)
 from stocks import install as install_stocks
 install_stocks(app,DEVICE_TOKEN)
+from radio import install as install_radio
+install_radio(app,DEVICE_TOKEN)
 from settings_center import install as install_settings_center,load as load_center_config
 install_settings_center(app,lambda:client,HERMES_URL,HERMES_KEY,lambda request:authenticated(request,DEVICE_TOKEN))
 app.cleanup_ctx.append(setup)

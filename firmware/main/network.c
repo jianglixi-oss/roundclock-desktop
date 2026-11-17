@@ -26,6 +26,8 @@
 volatile bool clock_time_valid=false;
 volatile bool clock_wifi_connected=false;
 char clock_ap_ssid[32];
+char clock_sta_ssid[33]="";
+char clock_sta_ip[16]="";
 static bool have_station=false;
 static volatile bool scanning=false;
 static SemaphoreHandle_t scan_lock;
@@ -53,11 +55,13 @@ static void wifi_event(void *arg,esp_event_base_t base,int32_t id,void *data)
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START && have_station) esp_wifi_connect();
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
         clock_wifi_connected=false;
+        clock_sta_ip[0]=0;
         if(have_station&&!scanning) esp_wifi_connect();
     }
     if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
         clock_wifi_connected=true;
         ip_event_got_ip_t *event=data;
+        snprintf(clock_sta_ip,sizeof(clock_sta_ip),IPSTR,IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG,"Station address: " IPSTR,IP2STR(&event->ip_info.ip));
         esp_netif_sntp_start();
     }
@@ -239,6 +243,7 @@ void clock_network_start(void)
     wifi_config_t station={0}; char ssid[33]={0},password[64]={0};
     length=sizeof(ssid); have_station=nvs_get_str(nvs,"ssid",ssid,&length)==ESP_OK && ssid[0];
     length=sizeof(password); nvs_get_str(nvs,"password",password,&length); nvs_close(nvs);
+    snprintf(clock_sta_ssid,sizeof(clock_sta_ssid),"%s",ssid);
     memcpy(station.sta.ssid,ssid,strlen(ssid));
     memcpy(station.sta.password,password,strlen(password));
     ESP_ERROR_CHECK(esp_netif_init());

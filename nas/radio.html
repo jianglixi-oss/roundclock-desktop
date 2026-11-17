@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>电台管理</title>
+<style>body{font:16px system-ui;background:#0c0d10;color:#f5f5f7;max-width:640px;margin:32px auto;padding:0 20px}h1{font-size:28px}input,button{font:inherit;border:0;border-radius:12px;padding:13px;background:#23252a;color:inherit}input{box-sizing:border-box;min-width:0}button{background:#287af5;cursor:pointer}.row{display:flex;gap:10px;margin:14px 0}.grid{display:grid;grid-template-columns:1fr 2fr;gap:10px}.card{padding:16px;border-radius:16px;background:#191b20;margin:12px 0;display:flex;align-items:center;justify-content:space-between;gap:10px}.hint{color:#a5a7ae;font-size:14px;line-height:1.7}.name{font-weight:600}.url{font-size:13px;color:#9a9ca5;word-break:break-all}.remove{background:#36383e}#status{min-height:26px;color:#ffbd69}.title{display:flex;align-items:center;justify-content:space-between}.title button{background:#36383e;padding:9px 14px}</style>
+<h1>电台管理</h1><p class="hint">小智语音点播电台（如「播放电台」），这里增删电台地址。只支持 HTTP/HTTPS MP3 流。</p>
+<p><a href="/settings" target="_top" style="color:#86b7ff">返回设置中心</a></p>
+<div class="card"><div class="grid"><input id="name" placeholder="电台名称，如 中国之声"><input id="url" placeholder="HTTP/HTTPS 流地址，如 http://..."></div><button id="add" style="width:100%">添加电台</button></div>
+<h2>电台列表 <small id="count"></small></h2><div id="list"></div>
+<p class="hint">保存后小智语音端立即生效（列表每次现读）。国内很多电台已改用 HLS，需找仍提供 HTTP MP3 的地址。</p>
+<p id="status" role="status"></p>
+<script>
+const $=id=>document.getElementById(id);let stations=[];function message(t){$('status').textContent=t}
+async function api(path,body){let r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});if(!r.ok)throw Error(await r.text());return r.json()}
+function card(s){let row=document.createElement('div');row.className='card';let text=document.createElement('div'),name=document.createElement('div'),url=document.createElement('div');name.className='name';name.textContent=s.name;url.className='url';url.textContent=s.url;text.append(name,url);let button=document.createElement('button');button.className='remove';button.textContent='移除';button.onclick=()=>save('remove',s.name);row.append(text,button);return row}
+function render(){$('list').replaceChildren();$('count').textContent=stations.length+'/50';for(const s of stations)$('list').append(card(s));if(!stations.length)$('list').innerHTML='<p class="hint">暂无电台，请添加。</p>'}
+async function load(){try{let v=await api('/radio/api/list');stations=v.stations;render()}catch(e){message(e.message)}}
+async function save(action,name){message('正在保存…');try{let v=await api('/radio/api/save',{action,name,url:$('url').value});stations=v.stations;render();$('name').value='';$('url').value='';message(action==='add'?'已添加，小智语音端立即生效。':'已移除。')}catch(e){message(e.message)}}
+$('add').onclick=()=>{const name=$('name').value.trim();if(!name)return message('请填写电台名称');save('add',name)};
+$('url').onkeydown=e=>{if(e.key==='Enter')$('add').click()};$('name').onkeydown=e=>{if(e.key==='Enter')$('url').focus()};
+load();
+</script></html>
